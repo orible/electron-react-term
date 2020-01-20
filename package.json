@@ -1,0 +1,24 @@
+{
+  "name": "electron-react-term",
+  "version": "1.0.0",
+  "description": "",
+  "main": "/src/electron.ts",
+  "scripts": {
+    "build": "webpack --watch --config ./webpack.config.js",
+    "start": "electron ./dist/electron.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/react": "^16.9.17",
+    "@types/react-dom": "^16.9.4",
+    "electron": "^7.1.9",
+    "html-webpack-plugin": "^3.2.0",
+    "react": "^16.12.0",
+    "react-dom": "^16.12.0",
+    "ts-loader": "^6.2.1",
+    "typescript": "^3.7.5",
+    "webpack": "^4.41.5",
+    "webpack-cli": "^3.3.10"
+  }
+}
