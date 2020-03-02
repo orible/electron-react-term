@@ -56,17 +56,145 @@ export class IRef {
 }
 
 /**
+ * IRendererShellClient
+ * Render process side, this listens to messages from it's main-process counterpart.
+ */
+export class IRendererShellClient extends IRef {
+    private _buffer: string;
+    constructor() {
+        super()
+        //ipcRenderer.addListener(this.ref(), this._event)
+    }
+
+    /**
+     * Currently messages are dispatched through the main router, 
+     * the experimental alternative is to use ipc to each router object.
+     */
+    public _event = (event, args: message) => {
+        switch (args.action) {
+            case 'data':
+                console.log("[IShell] in => ", args.data.data.toString())
+                this.buffer += args.data;
+                break;
+            default:
+                break;
+        }
+    }
+    public onClose = () => {
+        ipcRenderer.removeListener(this.ref(), this._event)
+    }
+    public buffer = (): string => {
+        return this._buffer;
+    }
+    public add = (data: string) => {
+        this._buffer += data;
+    }
+}
+
+/**
+ * IRendererShellClientRouter
+ * Render process side, this listens to messages from it's main-process counterpart.
+ * It can also request actions, and is then informed with an event callbackor sync return.
+ */
+export class IRendererShellRouter {
+    private channel: string;
+    private listeners: Array<IRendererShellClient>;
+    public shellCreated: (ref: IRendererShellClient) => any;
+    public shellWrite: (ref: IRendererShellClient) => any;
+    public shellDestroyed: (ref: IRendererShellClient) => any;
+    constructor(chan: string) {
+        this.listeners = new Array<IRendererShellClient>();
+        this.channel = chan;
+        ipcRenderer.on(this.channel, this._event)
+        ipcRenderer.send(this.channel, message('init', null))
+    }
+    private _destroyContainer = (uuid: string) => {
+        let index = this.listeners.findIndex((v) => v.ref() == uuid)
+        if (index < 1) {
+            console.log("[IRendererShellClientRouter] tried to destroy listener that does not exist!");
+            return
+        }
+        this.listeners[index].onClose();
+        this.listeners.splice(index, 1);
+    }
+    private _writeBuffer = (target: uuid, data): IRendererShellClient => {
+        const v = this.listeners.find((v) => v.ref() == target);
+        if (!v)
+            return null;
+        v.add(data)
+        return v;
+    }
+    private _get = (uuid: string): IRendererShellClient | null => {
+        return this.listeners.find((v) => v.ref() == uuid);
+    }
+    private _event = (event, args: message) => {
+        switch (args.action) {
+            case "create-fail":
+                // we called, "create" and the main process subsequently failed to open a terminal, 
+                // so we destroy the waiting container.
+                this._destroyContainer(args.data);
+                break;
+            //case "create-ok":
+            // we called, "create", and the main process subsequently opened a terminal.
+            //    break;
+            case "init":
+                this.shellCreated(this._get(args.data))
+                break;
+            case "add":
+                // the core is telling us we're getting a terminal!
+                // this also happens on window creation.
+                this.create();
+                break;
+            case "data":
+                console.log("[IRendererShellClientRouter] write")
+                let ref = this._writeBuffer(args.data.ref, args.data.data);
+                if (ref && this.shellWrite) {
+                    this.shellWrite(ref);
+                }
+                break;
+            case "losing":
+                // the core is telling us we're losing a terminal (could be moved to new window).
+                // so we destroy the container.
+                this._destroyContainer(args.data);
+                break;
+            case "close":
+                // the core is telling us the window is going to close, 
+                // so we destroy everything here.
+                break;
+            default:
+                break;
+        }
+    }
+    private _create = (): uuid => {
+        let ref = new IRendererShellClient();
+        this.listeners.push(ref);
+
+        // request main process create a shell for us, 
+        // and send the this-side string ref as the identifying callback id.
+        ipcRenderer.send(this.channel, message('create', ref.ref()));
+        return ref.ref();
+    }
+    public create = (): uuid => {
+        return this._create();
+    }
+    public send = (windowRef: string, data: any) => {
+        ipcRenderer.send(this.channel, message('input', { ref: windowRef, data: data }))
+    }
+}
+
+
+/**
  * IShell.
  * 
  * This class directly owns a shell instance and communicates with the remote listener.
  */
-export class IShell extends IRef {
+export class IProcessShell extends IRef {
     private proc: child.ChildProcessWithoutNullStreams;
     private windowRef: BrowserWindow; //may change during the program lifetime
     private channelRef: uuid;
     private remoteRef: uuid;
     private alive: boolean = false;
-    public attachedRef = () :string => {
+    public attachedRef = (): string => {
         return this.remoteRef;
     }
     // Construct references
@@ -110,7 +238,7 @@ export class IShell extends IRef {
     private _close = (code: number, signal: string) => {
 
     }
-    private _sendRemote = (data: any) => {
+    private _sendToRenderer = (data: any) => {
         console.log("[IShell] _sendRemote => ", data)
         this.windowRef.webContents.send(
             this.channelRef,
@@ -127,7 +255,7 @@ export class IShell extends IRef {
             this.alive = true;
         }
         console.log("[IShell] _stdout")
-        this._sendRemote(chunk.toString())
+        this._sendToRenderer(chunk.toString())
     }
     public setOutput = (window: BrowserWindow, channel: uuid, remote: uuid) => {
         this.windowRef = window;
@@ -144,14 +272,14 @@ export class IShell extends IRef {
 }
 
 /**
- * IRemoteWindow
+ * IProcessWindowController
  * This communicates with the remote render process.
  * It is responsible for opening and closing shells and
  * notifying the remote listener of state change.
  */
-export class IRemoteWindow extends IRef {
+export class IProcessWindowController extends IRef {
     winRef: BrowserWindow;
-    private procs: Array<IShell>;
+    private procs: Array<IProcessShell>;
     private getChannel(): string {
         return `event_${this.ref()}`;
     }
@@ -159,8 +287,7 @@ export class IRemoteWindow extends IRef {
         super()
         console.log("[IRemoteWindow] init")
         ipcMain.on(this.getChannel(), this._event);
-        //this.attached = new IShellRouter(this.getChannel());
-        this.procs = new Array<IShell>();
+        this.procs = new Array<IProcessShell>();
         this.winRef = new BrowserWindow({
             width: 800,
             height: 600,
@@ -174,7 +301,7 @@ export class IRemoteWindow extends IRef {
         // and load the index.html into the renderer
         this.winRef.loadFile(`index.html`);
     }
-    private _open = (remoteRef: string): IShell => {
+    private _open = (remoteRef: string): IProcessShell => {
         var type = [
             'cmd',
             'powershell',
@@ -184,17 +311,17 @@ export class IRemoteWindow extends IRef {
         let ctx = child.spawn(type[0]);
 
         // load shell object into array
-        let ref = new IShell(ctx, this.getChannel(), this.winRef, remoteRef);
+        let ref = new IProcessShell(ctx, this.getChannel(), this.winRef, remoteRef);
         this.procs.push(ref);
 
         console.log("[IShellRouter] opening process...");
         return ref;
     }
-    private _getShell = (uuid: string) :IShell => {
+    private _getShell = (uuid: string): IProcessShell => {
         return this.procs.find((v) => v.attachedRef() == uuid)
     }
     private _event = (action, args: message) => {
-        //console.log("[IShellRouter] event: ", args)
+        console.log("[IProcessWindowController] event: ", args)
         switch (args.action) {
             case 'init':
                 break;
@@ -203,10 +330,11 @@ export class IRemoteWindow extends IRef {
             case 'move':
                 break;
             case 'input':
+                //sent from the renderer-process
                 const ref = this._getShell(args.data.ref);
                 if (ref)
                     ref.send(args.data.data)
-                else 
+                else
                     console.log("[IShellRouter] bad ref")
                 break;
             case 'create':
@@ -226,130 +354,10 @@ export class IRemoteWindow extends IRef {
     }
 }
 
-
-/**
- * IRemoteShell
- * Render process side, this listens to messages from it's main-process counterpart.
- */
-export class IRemoteShell extends IRef {
-    private _buffer: string;
-    constructor() {
-        super()
-        //ipcRenderer.addListener(this.ref(), this._event)
-    }
-
-    /**
-     * Currently messages are dispatched through the main router, 
-     * the experimental alternative is to use ipc to each router object.
-     */
-    public _event = (event, args: message) => {
-        switch (args.action) {
-            case 'data':
-                console.log("[IShell] in => ", args.data.data.toString())
-                this.buffer += args.data;
-                break;
-            default:
-                break;
-        }
-    }
-    public onClose = () => {
-        ipcRenderer.removeListener(this.ref(), this._event)
-    }
-    public buffer = (): string => {
-        return this._buffer;
-    }
-    public add = (data: string) => {
-        this._buffer += data;
-    }
-}
-
-/**
- * IRemoteShellRouter
- * Render process side, this listens to messages from it's main-process counterpart.
- * It can also request actions, and is then informed with an event callbackor sync return.
- */
-export class IRemoteShellRouter {
-    private channel: string;
-    private listeners: Array<IRemoteShell>;
-    public shellCreated: (ref: IRemoteShell) => any;
-    public shellWrite: (ref: IRemoteShell) => any;
-    public shellDestroyed: (ref: IRemoteShell) => any;
-    constructor(chan: string) {
-        this.listeners = new Array<IRemoteShell>();
-        this.channel = chan;
-        ipcRenderer.on(this.channel, this._event)
-        ipcRenderer.send(this.channel, message('init', null))
-    }
-    private _destroyContainer = (uuid: string) => {
-        let index = this.listeners.findIndex((v) => v.ref() == uuid)
-        if (index < 1) {
-            console.log("[IRemoteShellRouter] tried to destroy listener that does not exist!");
-            return
-        }
-        this.listeners[index].onClose();
-        this.listeners.splice(index, 1);
-    }
-    private _writeBuffer = (target: uuid, data): IRemoteShell => {
-        const v = this.listeners.find((v) => v.ref() == target);
-        if (!v)
-            return null;
-        v.add(data)
-        return v;
-    }
-    private _get = (uuid: string): IRemoteShell | null => {
-        return this.listeners.find((v) => v.ref() == uuid);
-    }
-    private _event = (event, args: message) => {
-        switch (args.action) {
-            case "create-fail":
-                // we called, "create" and the main process subsequently failed to open a terminal, 
-                // so we destroy the waiting container.
-                this._destroyContainer(args.data);
-                break;
-            //case "create-ok":
-            // we called, "create", and the main process subsequently opened a terminal.
-            //    break;
-            case "init":
-                this.shellCreated(this._get(args.data))
-                break;
-            case "add":
-                // the core is telling us we're getting a terminal!
-                // this also happens on window creation.
-                this.create();
-                break;
-            case "data":
-                console.log("[IRemoteShellRouter] write")
-                let ref = this._writeBuffer(args.data.ref, args.data.data);
-                if (ref && this.shellWrite) {
-                    this.shellWrite(ref);
-                }
-                break;
-            case "losing":
-                // the core is telling us we're losing a terminal (could be moved to new window).
-                // so we destroy the container.
-                this._destroyContainer(args.data);
-                break;
-            case "close":
-                // the core is telling us the window is going to close, 
-                // so we destroy everything here.
-                break;
-            default:
-                break;
-        }
-    }
-    private _create = (): uuid => {
-        let ref = new IRemoteShell();
-        this.listeners.push(ref);
-
-        // request main process create a shell for us, 
-        // and send the this-side string ref as the identifying callback id.
-        ipcRenderer.send(this.channel, message('create', ref.ref()));
-        return ref.ref();
-    }
-    public create = (): uuid => {
-        return this._create();
-    }
-    public send = (windowRef: string, data: any) => {
-        ipcRenderer.send(this.channel, message('input', { ref: windowRef, data: data }))
+export class IProcessController {
+    _windows = new Array<IProcessWindowController>();
+    public createWindow = (): IProcessWindowController => {
+        this._windows.push(new IProcessWindowController());
+        return this._windows[this._windows.length - 1];
     }
 }

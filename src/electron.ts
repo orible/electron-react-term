@@ -1,35 +1,13 @@
 // src/electron.js
 import { app, BrowserWindow, ipcMain } from "electron"
-import { message, IRemoteWindow } from "./lib"
+import { message, IProcessController } from "./lib"
 
-const host = new Array<IRemoteWindow>();
+const controller = new IProcessController();
 
-class Terminal {
-    uuid: string
-    constructor(name: string) {
-        
-    }
-    id = () => this.uuid
-    show = () => false
-    close = () => false
-}
-
-const listenerEvent = (action, args: message) => {
-    switch(action) {
-        case 'close':
-            break;
-        case 'move':
-            break;
-        case 'create':
-            break;
-        default:
-            break;
-    }
-}
 
 function createWindow() {
     // Create the browser window.
-    host.push(new IRemoteWindow());
+    controller.createWindow();
 }
 
 app.on('ready', createWindow);
