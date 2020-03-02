@@ -8,6 +8,7 @@ const channel = args[1];
 console.log("[render/init] with: ", args);
 
 interface TerminalProps {
+    chunks: Array<Buffer>;
     buffer: string;
     onSend: (text: string) => void;
     onActive: () => void;
@@ -67,17 +68,16 @@ class ScreenTerminal extends React.Component<TerminalProps, TerminalBufferState>
     _setActive = () => {
         this.props.onActive();
     }
-
     render() {
         const { buffer } = this.props;
         const { text } = this.state;
-        //var data = buffer + text;
         return (
             <div style={{ borderWidth: "1px", borderColor: 'black' }} onClick={this._setActive}>
                 <p>Terminal</p>
-                <pre style={{ color: 'white' }}>
+                {this.props.chunks.map((e, i, b) => <pre style={{ color: 'white' }}>{e.toString() + ((i == b.length - 1) ? text : "")}</pre>)}
+                {false && <pre style={{ color: 'white' }}>
                     {buffer + text}
-                </pre>
+                </pre>}
                 {false && <input
                     style={{
                         position: 'fixed', bottom: 0, left: 0,
@@ -95,46 +95,26 @@ class ScreenTerminal extends React.Component<TerminalProps, TerminalBufferState>
 }
 
 interface TerminalRouterState {
-    map: Array<TerminalState>
     active: number
 }
 class TerminalRouter extends React.Component<{}, TerminalRouterState> {
     router: IRendererShellRouter;
     state = {
-        map: Array<TerminalState>(),
         active: 0,
     }
     componentWillMount() {
         // Init Renderer listener with channelId supplied from IProcessWindowController
         this.router = new IRendererShellRouter(channel);
-        this.router.shellCreated = this._created;
-        this.router.shellWrite = this._write;
-        this.router.shellDestroyed = this._destroyed;
+        this.router.onShellCreated = () => {
+            this.setState({});
+        };
+        this.router.onShellWrite = (ref: IRendererShellClient) => {
+            this.setState({});
+        }
+        this.router.onShellDestroyed = () => {
+            this.setState({});
+        };
         this.router.create();
-    }
-    _created = (ref: IRendererShellClient) => {
-        console.log("[TerminalRouter] created: ", ref)
-        this.setState((prevState) => ({
-            map: prevState.map.concat({ ref: ref.ref(), data: ref.buffer() })
-        }))
-    }
-    _destroyed = () => {
-        console.log("[TerminalRouter] _destroying: ")
-    }
-    _write = (ref: IRendererShellClient) => {
-        console.log("[TerminalRouter] _write: ", ref)
-        this.setState((prevState => ({
-            map: prevState.map.map((e) => {
-                if (e.ref == ref.ref()) {
-                    console.log("[TerminalRouter] update buffer: ", ref.buffer())
-                    return {
-                        ...e,
-                        data: ref.buffer()
-                    }
-                }
-                return e;
-            })
-        })))
     }
     _onSend = (ref: string, data: string) => {
         console.log("[TerminalRouter] send")
@@ -148,32 +128,32 @@ class TerminalRouter extends React.Component<{}, TerminalRouterState> {
         )
     }
     _renderActive = () => {
-        const { map } = this.state;
-        if (map.length < 1) {
+        if (this.router.children().length < 1) {
             return this._renderPrompt();
         }
-        const screen = map[this.state.active];
+        const screen = this.router.children()[this.state.active];
         return (
             <ScreenTerminal
                 onActive={() => false}
-                buffer={screen.data}
-                onSend={(data) => this._onSend(screen.ref, data)} />
+                buffer={screen.buffer()}
+                chunks={screen.chunks()}
+                onSend={(data) => this._onSend(screen.ref(), data)} />
         )
     }
     _renderTabBar = () => {
-        const { active, map } = this.state;
-        const _tabs = map.map((e, index) => (
-            <div
-                key={e.ref}
-                style={{ display: 'inline', backgroundColor: active == index ? 'black' : 'white' }}
+        const { active } = this.state;
+        const _tabs = this.router.children().map((e, index) => (
+            <div className="nav-item px-4"
+                key={e.ref()}
+                style={{ display: 'inline-block', backgroundColor: active == index ? 'black' : 'white', color: 'white' }}
                 onClick={() => this.setState({ active: index })}>
-                <p>{e.ref} - {index}</p>
+                <p>{e.ref()}</p>
             </div>
         ));
         return (
-            <div className="d-flex flex-row" >
+            <nav className="d-flex flex-row navbar" style={{ backgroundColor: 'white' }} >
                 {_tabs}
-            </div>
+            </nav>
         )
     }
     render() {

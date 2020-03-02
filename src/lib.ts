@@ -61,8 +61,10 @@ export class IRef {
  */
 export class IRendererShellClient extends IRef {
     private _buffer: string;
+    private _chunks: Array<Buffer>;
     constructor() {
         super()
+        this._chunks = Array<Buffer>();
         //ipcRenderer.addListener(this.ref(), this._event)
     }
 
@@ -86,8 +88,12 @@ export class IRendererShellClient extends IRef {
     public buffer = (): string => {
         return this._buffer;
     }
-    public add = (data: string) => {
+    public add = (data: any) => {
         this._buffer += data;
+        this._chunks.push(data);
+    }
+    public chunks = () => {
+        return this._chunks;
     }
 }
 
@@ -99,14 +105,17 @@ export class IRendererShellClient extends IRef {
 export class IRendererShellRouter {
     private channel: string;
     private listeners: Array<IRendererShellClient>;
-    public shellCreated: (ref: IRendererShellClient) => any;
-    public shellWrite: (ref: IRendererShellClient) => any;
-    public shellDestroyed: (ref: IRendererShellClient) => any;
+    public onShellCreated: (ref: IRendererShellClient) => any;
+    public onShellWrite: (ref: IRendererShellClient) => any;
+    public onShellDestroyed: (ref: IRendererShellClient) => any;
     constructor(chan: string) {
         this.listeners = new Array<IRendererShellClient>();
         this.channel = chan;
         ipcRenderer.on(this.channel, this._event)
         ipcRenderer.send(this.channel, message('init', null))
+    }
+    children(): Array<IRendererShellClient> {
+        return this.listeners;
     }
     private _destroyContainer = (uuid: string) => {
         let index = this.listeners.findIndex((v) => v.ref() == uuid)
@@ -117,7 +126,7 @@ export class IRendererShellRouter {
         this.listeners[index].onClose();
         this.listeners.splice(index, 1);
     }
-    private _writeBuffer = (target: uuid, data): IRendererShellClient => {
+    private _writeBuffer = (target: uuid, data: any): IRendererShellClient => {
         const v = this.listeners.find((v) => v.ref() == target);
         if (!v)
             return null;
@@ -138,7 +147,7 @@ export class IRendererShellRouter {
             // we called, "create", and the main process subsequently opened a terminal.
             //    break;
             case "init":
-                this.shellCreated(this._get(args.data))
+                this.onShellCreated(this._get(args.data))
                 break;
             case "add":
                 // the core is telling us we're getting a terminal!
@@ -148,8 +157,8 @@ export class IRendererShellRouter {
             case "data":
                 console.log("[IRendererShellClientRouter] write")
                 let ref = this._writeBuffer(args.data.ref, args.data.data);
-                if (ref && this.shellWrite) {
-                    this.shellWrite(ref);
+                if (ref && this.onShellWrite) {
+                    this.onShellWrite(ref);
                 }
                 break;
             case "losing":
@@ -255,7 +264,7 @@ export class IProcessShell extends IRef {
             this.alive = true;
         }
         console.log("[IShell] _stdout")
-        this._sendToRenderer(chunk.toString())
+        this._sendToRenderer(chunk)
     }
     public setOutput = (window: BrowserWindow, channel: uuid, remote: uuid) => {
         this.windowRef = window;
